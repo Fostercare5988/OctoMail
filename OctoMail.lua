@@ -251,6 +251,7 @@ function OctoMail.MAIL_CLOSED()
   end
   m.inbox_abort()
   m.sendmail_sending = false
+  m.sendmail_pending = nil
   m.api.StaticPopup_Hide( "OCTOMAIL_SEND_MONEY" )
   m.sendmail_clear()
   m.api.SendMailNameEditBox:ClearFocus()
@@ -270,8 +271,15 @@ end
 
 -- The native handler re-enables SendMailMailButton, which sendmail_load
 -- replaced with a dummy, so the queue and the real button are released here.
+-- Only a mail awaiting its result can fail; MAIL_FAILED from a send slot
+-- click between mails must not cancel the rest of the queue.
 function OctoMail.MAIL_FAILED()
-  m.sendmail_abort()
+  m.debug( "MAIL_FAILED" )
+  if m.sendmail_pending then
+    m.sendmail_abort()
+  else
+    m.api.SendMailFrame_CanSend()
+  end
 end
 
 function OctoMail.ADDON_LOADED()
@@ -344,6 +352,7 @@ end
 
 function OctoMail.MAIL_SEND_SUCCESS()
   m.debug( "MAIL_SEND_SUCCESS" )
+  m.sendmail_pending = nil
   if m.sendmail_state and not m.sendmail_state.sent then
     m.sendmail_state.sent = true
     m.log.add( 'Sent', m.sendmail_state )
@@ -1160,6 +1169,7 @@ end
 
 function OctoMail.sendmail_abort()
   m.sendmail_sending = false
+  m.sendmail_pending = nil
   m.sendmail_update = nil
   m.sendmail_state = nil
   if m.api.GetSendMailItem() then
@@ -1174,8 +1184,10 @@ function OctoMail.sendmail_send()
   local item = table.remove( m.sendmail_state.attachments, 1 )
   if item then
     m.api.ClearCursor()
-    m.orig.ClickSendMailItemButton()
-    m.api.ClearCursor()
+    if m.api.GetSendMailItem() then
+      m.orig.ClickSendMailItemButton()
+      m.api.ClearCursor()
+    end
     m.orig.PickupContainerItem( unpack( item ) )
     m.orig.ClickSendMailItemButton()
 
@@ -1224,6 +1236,7 @@ function OctoMail.sendmail_send()
   m.sendmail_state.sent_subject = subject
 
   m.debug( "SendMail" )
+  m.sendmail_pending = true
   m.api.SendMail( m.sendmail_state.to, subject, m.sendmail_state.body )
 
   if getn( m.sendmail_state.attachments ) == 0 then
