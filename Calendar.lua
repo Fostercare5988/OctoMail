@@ -82,6 +82,7 @@ function M.new()
     local end_day = get_end_day_of_month( tonumber( set_year ), tonumber( set_month ) )
 
     for i = 1, 42 do
+      days[ i ].mails = nil
       days[ i ]:SetText( "" )
       days[ i ]:Disable()
       days[ i ]:Hide()
@@ -157,6 +158,7 @@ function M.new()
     end
 
     button:SetScript( "OnEnter", function()
+      if not button.mails then return end
       m.api.GameTooltip:SetOwner( this, "ANCHOR_RIGHT" )
       m.api.GameTooltip:SetText( button.mails .. " mail" .. (button.mails > 1 and "s" or ""), 1, 1, 1, 1, true )
       m.api.GameTooltip:Show()

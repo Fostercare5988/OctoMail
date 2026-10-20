@@ -21,7 +21,8 @@ local INBOX_AUCTIONHOUSES = {
   [ "Alliance Auction House" ] = true,
   [ "Darnassus Auction House" ] = true,
   [ "Undercity Auction House" ] = true,
-  [ "Thunder Bluff  Auction House" ] = true,
+  [ "Thunder Bluff Auction House" ] = true,
+  [ "Thunder Bluff  Auction House" ] = true, -- double space kept from the original list
   [ "Horde Auction House" ] = true,
   [ "Blackwater Auction House" ] = true,
 }
@@ -57,7 +58,7 @@ function OctoMail:init()
 
   -- Register events
   self.update_frame:SetScript( "OnEvent", function() self[ event ]() end )
-  for _, event in { "ADDON_LOADED", "PLAYER_LOGIN", "UI_ERROR_MESSAGE", "CURSOR_UPDATE", "BAG_UPDATE", "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_INBOX_UPDATE" } do
+  for _, event in { "ADDON_LOADED", "PLAYER_LOGIN", "UI_ERROR_MESSAGE", "CURSOR_UPDATE", "BAG_UPDATE", "MAIL_SHOW", "MAIL_CLOSED", "MAIL_SEND_SUCCESS", "MAIL_FAILED", "MAIL_INBOX_UPDATE" } do
     self.update_frame:RegisterEvent( event )
   end
 
@@ -224,7 +225,9 @@ end
 function OctoMail.MAIL_CLOSED()
   m.inbox_abort()
   m.sendmail_sending = false
+  m.api.StaticPopup_Hide( "OCTOMAIL_SEND_MONEY" )
   m.sendmail_clear()
+  m.api.SendMailNameEditBox:ClearFocus()
 end
 
 function OctoMail.UI_ERROR_MESSAGE()
@@ -235,12 +238,14 @@ function OctoMail.UI_ERROR_MESSAGE()
       m.inbox_skip = true
     end
   elseif m.sendmail_sending and (arg1 == m.api.ERR_MAIL_TO_SELF or arg1 == m.api.ERR_PLAYER_WRONG_FACTION or arg1 == m.api.ERR_MAIL_TARGET_NOT_FOUND or arg1 == m.api.ERR_MAIL_REACHED_CAP) then
-    m.sendmail_sending = false
-    m.sendmail_state = nil
-    m.api.ClearCursor()
-    m.orig.ClickSendMailItemButton()
-    m.api.ClearCursor()
+    m.sendmail_abort()
   end
+end
+
+-- The native handler re-enables SendMailMailButton, which sendmail_load
+-- replaced with a dummy, so the queue and the real button are released here.
+function OctoMail.MAIL_FAILED()
+  m.sendmail_abort()
 end
 
 function OctoMail.ADDON_LOADED()
@@ -325,21 +330,43 @@ function OctoMail.MAIL_INBOX_UPDATE()
   if m.inbox_opening then
     m.inbox_update = true
   end
+end
 
+---@param subject string?
+---@return string? kind "Sold", "Removed", "Expired", "Won" or "Outbid"
+function OctoMail.auction_kind( subject )
+  if not subject then return nil end
+  if not m.auction_subjects then
+    m.auction_subjects = {}
+    for kind, text in { Sold = m.api.AUCTION_SOLD_MAIL_SUBJECT, Removed = m.api.AUCTION_REMOVED_MAIL_SUBJECT, Expired = m.api.AUCTION_EXPIRED_MAIL_SUBJECT, Won = m.api.AUCTION_WON_MAIL_SUBJECT, Outbid = m.api.AUCTION_OUTBID_MAIL_SUBJECT } do
+      m.auction_subjects[ kind ] = string.gsub( text, "%%s", "" )
+    end
+  end
+  for kind, prefix in m.auction_subjects do
+    if string.find( subject, prefix, 1, true ) then return kind end
+  end
+end
+
+-- Auction House and returned markers for the rows on the current page.
+function OctoMail.inbox_update_icons()
+  local num_items = m.api.GetInboxNumItems()
   for i = 1, 7 do
-    local index = (i + (m.api.InboxFrame.pageNum - 1) * 7)
-    if index <= m.api.GetInboxNumItems() then
-      local _, _, sender, _, _, _, _, _, _, was_returned = m.api.GetInboxHeaderInfo( index )
-      if INBOX_AUCTIONHOUSES[ sender ] then
-        m.api[ "OctoMailAuctionIcon" .. i ]:Show()
-      else
-        m.api[ "OctoMailAuctionIcon" .. i ]:Hide()
-      end
-      if was_returned then
-        m.api[ "OctoMailReturnedArrow" .. i ]:Show()
-      else
-        m.api[ "OctoMailReturnedArrow" .. i ]:Hide()
-      end
+    local index = i + (m.api.InboxFrame.pageNum - 1) * 7
+    local auction, returned
+    if index <= num_items then
+      local _, _, sender, subject, _, _, _, _, _, was_returned = m.api.GetInboxHeaderInfo( index )
+      auction = INBOX_AUCTIONHOUSES[ sender ] or m.auction_kind( subject )
+      returned = was_returned
+    end
+    if auction then
+      m.api[ "OctoMailAuctionIcon" .. i ]:Show()
+    else
+      m.api[ "OctoMailAuctionIcon" .. i ]:Hide()
+    end
+    if returned then
+      m.api[ "OctoMailReturnedArrow" .. i ]:Show()
+    else
+      m.api[ "OctoMailReturnedArrow" .. i ]:Hide()
     end
   end
 end
@@ -368,6 +395,7 @@ function OctoMail.inbox_load()
 end
 
 function OctoMail.inbox_open_all()
+  m.received_money, m.received_icon, m.received_item = 0, nil, nil
   m.inbox_opening = true
   m.inbox_update_lock()
   m.inbox_skip = false
@@ -480,13 +508,14 @@ function OctoMail.inbox_update_lock()
   end
 end
 
-function OctoMail.hook.GetInboxHeaderInfo( ... )
-  local sender, canReply = arg[ 3 ], arg[ 12 ]
-  if sender and canReply then
+---@param index number
+function OctoMail.hook.GetInboxHeaderInfo( index )
+  local package_icon, stationery_icon, sender, subject, money, cod, days_left, has_item, was_read, was_returned, text_created, can_reply, is_gm = m.orig.GetInboxHeaderInfo( index )
+  if sender and can_reply then
     m.add_auto_complete_name( sender )
   end
 
-  return m.orig.GetInboxHeaderInfo( unpack( arg ) )
+  return package_icon, stationery_icon, sender, subject, money, cod, days_left, has_item, was_read, was_returned, text_created, can_reply, is_gm
 end
 
 function OctoMail.hook.OpenMail_Reply( ... )
@@ -507,6 +536,7 @@ function OctoMail.hook.InboxFrame_Update()
   local text = totalPages > 0 and (currentPage .. "/" .. totalPages) or m.api.EMPTY
   m.api.InboxTitleText:SetText( m.api.INBOX .. " [" .. text .. "]" )
 
+  m.inbox_update_icons()
   m.inbox_update_lock()
 end
 
@@ -729,7 +759,16 @@ function OctoMail.hook.UseContainerItem( bag, slot, onself )
 end
 
 function OctoMail.hook.SendMailFrame_CanSend()
-  if not m.sendmail_sending and string.len( m.api.SendMailNameEditBox:GetText() ) > 0 and (m.api.SendMailSendMoneyButton:GetChecked() and m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ) or 0) + m.api.GetSendMailPrice() * math.max( 1, m.sendmail_num_attachments() ) <= m.api.GetMoney() then
+  local cod_too_high = m.api.SendMailCODButton:GetChecked() and m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ) > m.api.MAX_COD_AMOUNT * m.api.COPPER_PER_GOLD
+  if cod_too_high then
+    m.api.SendMailErrorText:Show()
+    m.api.SendMailErrorCoin:Show()
+  else
+    m.api.SendMailErrorText:Hide()
+    m.api.SendMailErrorCoin:Hide()
+  end
+
+  if not m.sendmail_sending and not cod_too_high and string.len( m.api.SendMailNameEditBox:GetText() ) > 0 and (m.api.SendMailSendMoneyButton:GetChecked() and m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ) or 0) + m.api.GetSendMailPrice() * math.max( 1, m.sendmail_num_attachments() ) <= m.api.GetMoney() then
     MailMailButton:Enable()
   else
     MailMailButton:Disable()
@@ -786,6 +825,14 @@ end
 function OctoMail.send_mail_button_onclick()
   m.api.MailAutoCompleteBox:Hide()
 
+  if m.api.SendMailSendMoneyButton:GetChecked() and m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ) > 0 then
+    m.api.StaticPopup_Show( "OCTOMAIL_SEND_MONEY", m.api.SendMailNameEditBox:GetText() )
+  else
+    m.sendmail_start()
+  end
+end
+
+function OctoMail.sendmail_start()
   m.api.OctoMail_To = m.api.SendMailNameEditBox:GetText()
   m.api.SendMailNameEditBox:HighlightText()
 
@@ -794,7 +841,7 @@ function OctoMail.send_mail_button_onclick()
     subject = MailSubjectEditBox:GetText(),
     body = m.api.SendMailBodyEditBox:GetText(),
     money = m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ),
-    cod = m.api.SendMailCODButton:GetChecked(),
+    cod_checked = m.api.SendMailCODButton:GetChecked(),
     attachments = m.sendmail_attachments(),
     numMessages = math.max( 1, m.sendmail_num_attachments() ),
   }
@@ -806,6 +853,21 @@ end
 
 function OctoMail.sendmail_load()
   m.api.SendMailFrame:EnableMouse( false )
+
+  -- Same confirmation as the native SEND_MONEY popup, but it starts OctoMail's queue.
+  m.api.StaticPopupDialogs[ "OCTOMAIL_SEND_MONEY" ] = {
+    text = m.api.SEND_MONEY_CONFIRMATION,
+    button1 = m.api.ACCEPT,
+    button2 = m.api.CANCEL,
+    OnAccept = function()
+      m.sendmail_start()
+    end,
+    OnShow = function()
+      m.api.MoneyFrame_Update( this:GetName() .. "MoneyFrame", m.api.MoneyInputFrame_GetCopper( m.api.SendMailMoney ) )
+    end,
+    hasMoneyFrame = 1,
+    hideOnEscape = 1
+  }
 
   m.api.SendMailFrame:CreateTexture( "MailHorizontalBarLeft", "BACKGROUND" )
   m.api.MailHorizontalBarLeft:SetTexture( "Interface\\ClassTrainerFrame\\UI-ClassTrainer-HorizontalBar" )
@@ -865,7 +927,7 @@ function OctoMail.sendmail_load()
   end )
   m.api.SendMailNameEditBox:SetScript( "OnChar", function()
     m.api.OctoMail_To = nil
-    GetSuggestions()
+    m.get_suggestions()
   end )
   m.api.SendMailNameEditBox:SetScript( "OnTabPressed", function()
     if m.api.MailAutoCompleteBox:IsVisible() then
@@ -1062,6 +1124,18 @@ function OctoMail.sendmail_clear()
   m.api.SendMailFrame_Update()
 end
 
+function OctoMail.sendmail_abort()
+  m.sendmail_sending = false
+  m.sendmail_update = nil
+  m.sendmail_state = nil
+  if m.api.GetSendMailItem() then
+    m.api.ClearCursor()
+    m.orig.ClickSendMailItemButton()
+    m.api.ClearCursor()
+  end
+  m.api.SendMailFrame_Update()
+end
+
 function OctoMail.sendmail_send()
   local item = table.remove( m.sendmail_state.attachments, 1 )
   if item then
@@ -1073,23 +1147,27 @@ function OctoMail.sendmail_send()
 
     if not m.api.GetSendMailItem() then
       m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail|r: " .. m.api.ERROR_CAPS, 1, 0, 0 )
+      m.sendmail_abort()
       return
     end
   end
 
+  -- money and C.O.D. describe this mail only, for the log entry it produces
   local amount = m.sendmail_state.money
-  m.sendmail_state.sent_money = m.sendmail_state.money
+  m.sendmail_state.sent_money = nil
+  m.sendmail_state.cod = nil
   m.sendmail_state.sent = false
 
   if amount > 0 then
     if not m.api.SendMailCODAllButton:GetChecked() then
       m.sendmail_state.money = 0
     end
-    if m.sendmail_state.cod then
+    if m.sendmail_state.cod_checked then
       m.sendmail_state.cod = amount
       m.api.SetSendMailCOD( amount )
     else
       m.sendmail_state.money = 0
+      m.sendmail_state.sent_money = amount
       m.api.SetSendMailMoney( amount )
     end
   end
@@ -1159,7 +1237,7 @@ do
     m.api.SendMailNameEditBox:HighlightText( 0, 0 )
   end
 
-  function GetSuggestions()
+  function OctoMail.get_suggestions()
     local input = m.api.SendMailNameEditBox:GetText()
     inputLength = string.len( input )
 
@@ -1459,7 +1537,7 @@ function OctoMail.log.add( log_type, state )
   if log_type == "Sent" then
     data.participant = state.to
     data.subject = state.sent_subject
-    if state.send_money and state.sent_money > 0 then data.money = tonumber( state.sent_money ) end
+    if state.sent_money and state.sent_money > 0 then data.money = tonumber( state.sent_money ) end
   else -- Received
     data.participant = state.from
     data.subject = state.subject
@@ -1468,17 +1546,7 @@ function OctoMail.log.add( log_type, state )
 
     if state.money and state.money > 0 then data.money = tonumber( state.money ) end
 
-    if string.find( data.subject, string.gsub( m.api.AUCTION_SOLD_MAIL_SUBJECT, "%%s", "" ) ) then
-      data[ "ah" ] = "Sold"
-    elseif string.find( data.subject, string.gsub( m.api.AUCTION_REMOVED_MAIL_SUBJECT, "%%s", "" ) ) then
-      data[ "ah" ] = "Removed"
-    elseif string.find( data.subject, string.gsub( m.api.AUCTION_EXPIRED_MAIL_SUBJECT, "%%s", "" ) ) then
-      data[ "ah" ] = "Expired"
-    elseif string.find( data.subject, string.gsub( m.api.AUCTION_WON_MAIL_SUBJECT, "%%s", "" ) ) then
-      data[ "ah" ] = "Won"
-    elseif string.find( data.subject, string.gsub( m.api.AUCTION_OUTBID_MAIL_SUBJECT, "%%s", "" ) ) then
-      data[ "ah" ] = "Outbid"
-    end
+    data.ah = m.auction_kind( data.subject )
   end
 
   local log = m.api.OctoMail_Log[ log_type ]
