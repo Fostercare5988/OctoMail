@@ -1,12 +1,13 @@
-## X-Maintainer: Fostercare5988
-
 ## Interface: 11200
 ## Title: |cffabd473Octo|cffffffffMail
-## Author: shirsig, sica42 - OctoWoW fork by Roby_Brok
-## Version: 1.5.0
-## Notes: Mailbox enhancement - OctoWoW fork
-## X-Website: https://github.com/Fostercare5988
+## Author: shirsig, sica42; maintained by Fostercare5988
+## X-Maintainer: Fostercare5988
+## Version: 1.6.0
+## Notes: Mailbox enhancement: open all, send many attachments, recipient autocomplete and a mail log. Requires ClassicAPI 1.16.0+.
+## X-Website: https://github.com/Fostercare5988/OctoMail
+## X-ClassicAPI-Min-Version: 1.16.0
+## Dependencies: !!!ClassicAPI
 ## SavedVariables: OctoMail_AutoCompleteNames
-## SavedVariablesPerCharacter: OctoMail_To OctoMail_Point OctoMail_Log
+## SavedVariablesPerCharacter: OctoMail_To OctoMail_Log
 
 OctoMail.xml

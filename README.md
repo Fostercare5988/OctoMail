@@ -1,70 +1,52 @@
 # OctoMail
 
-A mailbox enhancement for WoW 1.12, tailored for [OctoWoW](https://octowow.st).
-Maintained by **Roby_Brok**. Part of my [OctoWoW addon setup](https://github.com/roby-brok/octowow-addons).
+A mailbox enhancement for WoW 1.12, made for [OctoWoW](https://octowow.st).
+Maintained by **Fostercare5988**.
 
 This is a fork of **[TurtleMail](https://github.com/sica42/TurtleMail)** by **shirsig** and
-**sica42** — all of the actual work is theirs. I renamed it and fixed two bugs.
+**sica42**. Nearly all of the work is theirs.
 
----
+## Requirements
+
+- WoW 1.12.1 client (the OctoWoW client)
+- [ClassicAPI](https://github.com/brues-code/ClassicAPI) 1.16.0 or newer. OctoMail does not load without it.
 
 ## What it does
 
-An extension to the Blizzard mail interface: open all mail with one button, autocomplete recipient
-names, a searchable log of everything sent and received, and auction mail marked up so you can see
-at a glance what sold, expired or was outbid.
+- **Open All** takes the money and items from every mail in one click. C.O.D. and GM mail are skipped.
+  Right-click a mail to take its contents.
+- **Send up to 21 attachments** at once. Each item goes out as its own mail with a numbered
+  subject. Right-click a bag item while the mailbox is open to attach it.
+- **C.O.D. for every mail**: tick *All mails* to charge the C.O.D. on each mail, not only the first.
+- **Recipient autocomplete** from people you have mailed or received mail from, your friends and
+  your guild. Press Tab to cycle. Names unused for 30 days are dropped.
+- **Mail log** (off by default): a searchable record of mail sent and received, with filters
+  for money, C.O.D., returned and auction mail, by player and by date. Turn it on with `/om log`.
+- Auction House and returned mail are marked in the inbox.
 
-## What this fork changes
+Sending gold asks for confirmation, as in the default mailbox.
 
-**Fixed: the autocomplete list never stopped growing.** It kept a "last seen" stamp per recipient
-and dropped anyone unseen for 30 days — except the stamp was written with `GetTime()`, which counts
-seconds since the *client launched* and resets to roughly zero at every login. A stamp from an
-earlier session is therefore usually *larger* than the current reading, so the subtraction came out
-negative and the check could only ever pass during one unbroken 30-day session. In practice nothing
-was ever removed. Now uses `time()`, an absolute timestamp that survives logging out.
+## Commands
 
-**Fixed: the mail log was never trimmed.** Every mail sent or received was appended to a saved
-variable with no limit, so it grew for the life of the character and was parsed back in full at
-every login. Now capped at the most recent 500 entries per log, oldest dropped first.
+`/om` or `/octomail`:
 
-**Renamed to OctoMail**, with the saved variables moved to match. Slash commands are `/octomail`
-and `/om`.
-
-## Coming from TurtleMail
-
-Your data carries over, but the timing matters:
-
-1. Install OctoMail **alongside** TurtleMail
-2. Log in once — your mail log, autocomplete names, saved recipient and window position are
-   imported, and you will see a message confirming it
-3. Remove TurtleMail
-
-The import can only read TurtleMail's saved variables while TurtleMail is still installed, because
-that addon is what loads them. Delete it first and there is nothing left to read — the data is not
-destroyed, but OctoMail cannot reach it. Importing runs once and never overwrites anything you have
-already accumulated.
-
-`/tm` is deliberately **not** registered, so it cannot fight with TurtleMail during that one
-overlapping login. Use `/om`.
+| Command | Effect |
+| --- | --- |
+| `/om log` | Turn the mail log on or off |
+| `/om clear sent` | Clear the sent log |
+| `/om clear received` | Clear the received log |
+| `/om clear names` | Forget saved autocomplete names |
 
 ## Install
 
-1. **[Download](https://github.com/roby-brok/OctoMail/archive/refs/heads/master.zip)**
-2. Unpack the zip
-3. **Rename the folder `OctoMail-master` to `OctoMail`** — this step is not optional
-4. Move `OctoMail` into `Wow-Directory\Interface\AddOns`
-5. Restart WoW
-
-Step 3 matters because WoW only loads an addon when the folder name matches the `.toc` inside it. A
-folder called `OctoMail-master` containing `OctoMail.toc` is skipped in silence — no error, no entry
-in the addon list, it simply never runs.
+1. [Download](https://github.com/Fostercare5988/OctoMail/archive/refs/heads/main.zip) and unpack the zip.
+2. Rename the folder `OctoMail-main` to `OctoMail`. WoW only loads an addon whose folder name
+   matches its `.toc` file.
+3. Move `OctoMail` into `Interface\AddOns` and restart WoW.
 
 ## Credits
 
-* **[shirsig](https://github.com/shirsig)** and **[sica42](https://github.com/sica42/TurtleMail)** —
-  wrote TurtleMail, which is essentially all of this addon.
-* Localisations (de, es, fr, ru) came with the original.
-
-Neither fix is OctoWoW-specific and both apply equally upstream. If sica42 wants either one, it's
-theirs to take — I forked rather than opened a pull request only because the rename made it
-unsuitable as a patch.
+- **[shirsig](https://github.com/shirsig)** and **[sica42](https://github.com/sica42/TurtleMail)**
+  wrote TurtleMail, which is most of this addon.
+- **Roby_Brok** made the OctoMail fork: the rename, and fixes for autocomplete expiry and an
+  unbounded mail log.

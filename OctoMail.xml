@@ -1,10 +1,5 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
 ..\FrameXML\UI.xsd">
-	<Script file="localization.lua"/>
-	<Script file="localization.fr.lua"/>
-	<Script file="localization.de.lua"/>
-	<Script file="localization.es.lua"/>
-	<Script file="localization.ru.lua"/>
 	<Script file="Calendar.lua"/>
 	<Script file="OctoMail.lua"/>	
 
@@ -220,7 +215,7 @@
 		<Scripts>
 			<OnEnter>
 				GameTooltip:SetOwner( this, "ANCHOR_RIGHT" );
-				GameTooltip:SetText( L[ "This mail was returned to you." ] );
+				GameTooltip:SetText( "This mail was returned to you." );
 			</OnEnter>
 			<OnLeave>
 				GameTooltip:Hide();
@@ -266,7 +261,7 @@
 		<Scripts>
 			<OnEnter>
 				GameTooltip:SetOwner(this, "ANCHOR_RIGHT");
-				GameTooltip:SetText( L[ "This mail was sent by an auctionhouse." ] );
+				GameTooltip:SetText( "This mail was sent by an auctionhouse." );
 			</OnEnter>
 			<OnLeave>
 				GameTooltip:Hide();
@@ -752,7 +747,7 @@
 				</Anchors>
 				<Scripts>
 					<OnLoad>
-						OctoMail.log.players_dropdown_on_load()
+						if OctoMail.log then OctoMail.log.players_dropdown_on_load() end
 					</OnLoad>
 					<OnShow>
 						OctoMail.log.players_dropdown_on_load()

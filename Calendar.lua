@@ -1,6 +1,14 @@
 OctoMail = OctoMail or {}
 local m = OctoMail
 
+-- ClassicAPI 1.16.0 is the support floor. This file loads first, so it decides
+-- for OctoMail.lua as well (see m.disabled there).
+if type( CLASSIC_API_VERSION ) ~= "number" or CLASSIC_API_VERSION < 11600 then
+  m.disabled = true
+  DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail|r: requires ClassicAPI 1.16.0 or newer. OctoMail is turned off." )
+  return
+end
+
 if m.Calendar then return end
 
 ---@class Calendar

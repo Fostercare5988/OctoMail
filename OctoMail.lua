@@ -1,13 +1,20 @@
 OctoMail = OctoMail or {}
-L = OctoMail.L
-
 local m = OctoMail
+
+if m.disabled then return end
+
 local getn = table.getn ---@diagnostic disable-line: deprecated
 local function pack( ... ) return arg end
 
 local ATTACHMENTS_MAX = 21
 local ATTACHMENTS_PER_ROW_SEND = 7
 local ATTACHMENTS_MAX_ROWS_SEND = 3
+
+local DATE_FORMAT = "%d.%m.%Y"
+local TIME_FORMAT = "%H:%M"
+
+-- Filter menu labels that differ from the saved filter key.
+local FILTER_LABELS = { Money = "Money Attached", COD = "C.O.D.", AH = "Auction House" }
 
 local INBOX_AUCTIONHOUSES = {
   [ "Stormwind Auction House" ] = true,
@@ -76,23 +83,23 @@ end
 ---@param args string
 function OctoMail.slash_command( args )
   if args == "" or args == "help" then
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail " .. L[ "Help" ] .. "|r" )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om log|r " .. L[ "Toggle logging on/off" ] )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear sent|r " .. L[ "Clear sent log" ] )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear received|r " .. L[ "Clear received log" ] )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear names|r " .. L[ "Clear saved recipient names from autocomplete" ] )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail " .. "Help" .. "|r" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om log|r " .. "Toggle logging on/off" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear sent|r " .. "Clear sent log" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear received|r " .. "Clear received log" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear names|r " .. "Clear saved recipient names from autocomplete" )
     return
   end
 
   if args == "log" then
     m.api.OctoMail_Log[ "Settings" ][ "Enabled" ] = not m.api.OctoMail_Log[ "Settings" ][ "Enabled" ]
     if m.api.OctoMail_Log[ "Settings" ][ "Enabled" ] then
-      m.info( L[ "Logging is enabled." ] )
+      m.info( "Logging is enabled." )
       if m.api.MailFrame:IsVisible() then
         m.api.MailFrameTab3:Show()
       end
     else
-      m.info( L[ "Logging is disabled." ] )
+      m.info( "Logging is disabled." )
       if m.api.MailFrame:IsVisible() then
         m.api.MailFrameTab3:Hide()
       end
@@ -102,13 +109,13 @@ function OctoMail.slash_command( args )
 
   if string.find( args, "^clear" ) then
     if args == "clear sent" then
-      m.info( L[ "Sent log cleared." ] )
+      m.info( "Sent log cleared." )
       m.api.OctoMail_Log[ "Sent" ] = {}
     elseif args == "clear received" then
-      m.info( L[ "Received log cleared." ] )
+      m.info( "Received log cleared." )
       m.api.OctoMail_Log[ "Received" ] = {}
     elseif args == "clear names" then
-      m.info( L[ "Recipient autocomplete names have been cleared." ] )
+      m.info( "Recipient autocomplete names have been cleared." )
       local key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
       m.api.OctoMail_AutoCompleteNames[ key ] = {}
     end
@@ -117,9 +124,9 @@ function OctoMail.slash_command( args )
   if args == "debug" then
     m.debug_enabled = not m.debug_enabled
     if m.debug_enabled then
-      m.info( L[ "Debug is enabled." ] )
+      m.info( "Debug is enabled." )
     else
-      m.info( L[ "Debug is disabled." ] )
+      m.info( "Debug is disabled." )
     end
   end
 end
@@ -148,7 +155,7 @@ function OctoMail.on_update()
     local _, _, _, _, _, COD, _, _, _, _, _, _, isGM = m.api.GetInboxHeaderInfo( m.inbox_index )
     if m.inbox_index > m.api.GetInboxNumItems() then
       if m.money_received > 0 then
-        m.info( string.format( "%s%s.", m.format_money( m.money_received ), L[ "collected" ] ) )
+        m.info( string.format( "%s%s.", m.format_money( m.money_received ), "collected" ) )
       end
       m.inbox_abort()
     elseif m.inbox_skip or COD > 0 or isGM then
@@ -188,11 +195,6 @@ function OctoMail.BAG_UPDATE()
 end
 
 function OctoMail.MAIL_SHOW()
-  if m.api.OctoMail_Point then
-    m.debug( "Set point" )
-    m.api.MailFrame:SetPoint( m.api.OctoMail_Point.point, m.api.OctoMail_Point.x, m.api.OctoMail_Point.y )
-  end
-
   if not m.first_show then
     m.first_show = true
     if m.pfui_skin_enabled then
@@ -241,64 +243,12 @@ function OctoMail.UI_ERROR_MESSAGE()
   end
 end
 
--- Carry data over from TurtleMail, which this is a fork of. The rename moved
--- the SavedVariables to OctoMail_*, so a straight swap would have looked like
--- a wiped mail log and a forgotten autocomplete list.
---
--- Only possible while TurtleMail is still installed and enabled: its own
--- SavedVariables file is what puts TurtleMail_* into the global namespace. Log
--- in once with both present, then remove TurtleMail. Runs once and is a no-op
--- after that, so nothing is clobbered if you later use both again.
-function OctoMail.migrate_from_turtlemail()
-  local moved = {}
-
-  if m.api.TurtleMail_AutoCompleteNames and not m.api.OctoMail_Log[ "Settings" ].migrated then
-    for key, names in m.api.TurtleMail_AutoCompleteNames do
-      m.api.OctoMail_AutoCompleteNames[ key ] = m.api.OctoMail_AutoCompleteNames[ key ] or {}
-      for name, seen in names do
-        if not m.api.OctoMail_AutoCompleteNames[ key ][ name ] then
-          m.api.OctoMail_AutoCompleteNames[ key ][ name ] = seen
-        end
-      end
-    end
-    table.insert( moved, "autocomplete names" )
-  end
-
-  if not m.api.OctoMail_Log[ "Settings" ].migrated and m.api.TurtleMail_Log then
-    for _, log_type in ipairs( { "Sent", "Received" } ) do
-      local old = m.api.TurtleMail_Log[ log_type ]
-      if old and table.getn( old ) > 0 and table.getn( m.api.OctoMail_Log[ log_type ] ) == 0 then
-        for _, entry in ipairs( old ) do
-          table.insert( m.api.OctoMail_Log[ log_type ], entry )
-        end
-        while table.getn( m.api.OctoMail_Log[ log_type ] ) > m.LOG_MAX_ENTRIES do
-          table.remove( m.api.OctoMail_Log[ log_type ], 1 )
-        end
-      end
-    end
-    table.insert( moved, "mail log" )
-  end
-
-  if m.api.TurtleMail_To and not m.api.OctoMail_To then
-    m.api.OctoMail_To = m.api.TurtleMail_To
-  end
-  if m.api.TurtleMail_Point and not m.api.OctoMail_Point then
-    m.api.OctoMail_Point = m.api.TurtleMail_Point
-  end
-
-  m.api.OctoMail_Log[ "Settings" ].migrated = true
-  if table.getn( moved ) > 0 then
-    m.info( "Imported your " .. table.concat( moved, " and " ) .. " from TurtleMail. You can remove TurtleMail now." )
-  end
-end
-
 function OctoMail.ADDON_LOADED()
   if arg1 ~= "OctoMail" then return end
 
   local version = m.api.GetAddOnMetadata( "OctoMail", "Version" )
   m.info( string.format( "Loaded (|cffeda55fv%s|r).", version ) )
 
-  m.migrate_from_turtlemail()
 
   if not m.api.OctoMail_Log[ "Settings" ].first_run then
     m.api.OctoMail_Log[ "Settings" ].first_run = version
@@ -317,7 +267,6 @@ function OctoMail.ADDON_LOADED()
     m.api.UIPanelWindows[ "FriendsFrame" ] = { area = "left", pushable = 2 }
   end
 
-  m.api.MailFrame:SetScript( "OnDragStop", m.on_drag_stop )
   m.api.MailFrame:SetClampedToScreen( true )
   m.api.PanelTemplates_SetNumTabs( m.api.MailFrame, 3 )
 
@@ -441,9 +390,9 @@ function OctoMail.set_cod_text()
   end
 
   if m.api.SendMailCODAllButton:GetChecked() then
-    m.api.SendMailMoneyText:SetText( text .. " " .. L[ "each mail" ] .. ":" )
+    m.api.SendMailMoneyText:SetText( text .. " " .. "each mail" .. ":" )
   else
-    m.api.SendMailMoneyText:SetText( text .. " " .. L[ "1st mail" ] .. ":" )
+    m.api.SendMailMoneyText:SetText( text .. " " .. "1st mail" .. ":" )
   end
 end
 
@@ -472,19 +421,13 @@ end
 ---@param money number
 function OctoMail.update_money( money )
   m.money_received = m.money_received + money
-  m.api.MoneyReceived:SetText( L[ "Money received" ] .. ": " .. m.format_money( m.money_received ) )
+  m.api.MoneyReceived:SetText( "Money received" .. ": " .. m.format_money( m.money_received ) )
 
   if m.money_received > 0 then
     m.api.MoneyReceived:Show()
   else
     m.api.MoneyReceived:Hide()
   end
-end
-
-function OctoMail.on_drag_stop()
-  this:StopMovingOrSizing()
-  local point, _, _, x, y = m.api.MailFrame:GetPoint()
-  m.api.OctoMail_Point = { point = point, x = x, y = y }
 end
 
 ---@param i number
@@ -954,7 +897,7 @@ function OctoMail.sendmail_load()
     m.api.MailAutoCompleteBox:Hide()
   end
 
-  m.api.SendMailCODAllButtonText:SetText( "  " .. L[ "All mails" ] )
+  m.api.SendMailCODAllButtonText:SetText( "  " .. "All mails" )
   m.api.SendMailCODAllButton:SetScript( "OnClick", m.set_cod_text )
 
   do
@@ -1274,8 +1217,8 @@ do
 end
 
 function OctoMail.log.load()
-  m.api.OctoMailLogTitleText:SetText( L[ "Log" ] )
-  m.api.MailFrameTab3:SetText( L[ "Log" ] )
+  m.api.OctoMailLogTitleText:SetText( "Log" )
+  m.api.MailFrameTab3:SetText( "Log" )
 
   local font_file = m.pfui_skin_enabled and m.api.pfUI.font_default or "FONTS\\ARIALN.TTF"
   local font_size = 11
@@ -1317,7 +1260,7 @@ function OctoMail.log.load()
     m.log.scroll( -10 )
   end )
 
-  m.api.OctoMailLogFiltersButton:SetText( L[ "Filters" ] )
+  m.api.OctoMailLogFiltersButton:SetText( "Filters" )
   m.api.OctoMailLogFiltersButton:GetFontString():SetPoint( "LEFT", m.api.OctoMailLogFiltersButton, "LEFT", 10, 0 )
 
   m.api.OctoMailLogFiltersButton:SetScript( "OnMouseDown", function()
@@ -1410,7 +1353,7 @@ function OctoMail.log.filters_menu( level )
 
   if level == 1 then
     for _, filter in values do
-      info.text = L[ filter ]
+      info.text = FILTER_LABELS[ filter ] or filter
       info.checked = filters[ filter ]
       info.arg1 = filter
       info.func = m.log.toggle_filter
@@ -1420,7 +1363,7 @@ function OctoMail.log.filters_menu( level )
     end
   elseif level == 2 then
     for _, filter in { "Sold", "Cancelled", "Expired", "Won", "Outbid" } do
-      info.text = L[ filter ]
+      info.text = FILTER_LABELS[ filter ] or filter
       info.checked = filters[ "AH" .. filter ]
       info.arg1 = filter
       info.arg2 = "AH"
@@ -1444,7 +1387,7 @@ function OctoMail.log.show_calendar()
   else
     local text = string.gsub( this:GetName(), "Button", "Text" )
     m.calendar.show( m.api.OctoMail_Log[ m.current_log_type ], time(), this, function( selected_date )
-      local date_str = date( L[ "date_format" ], selected_date )
+      local date_str = date( DATE_FORMAT, selected_date )
       m.api[ text ]:SetText( date_str )
 
       local v = m.current_log_type .. (string.find( text, "Start" ) and "_start_time" or "_end_time")
@@ -1593,8 +1536,8 @@ function OctoMail.log.populate( log_type, index )
     return ret
   end )
 
-  m.api.OctoMailLogStartTimeText:SetText( start_time and date( L[ "date_format" ], start_time ) or "" )
-  m.api.OctoMailLogEndTimeText:SetText( end_time and date( L[ "date_format" ], end_time ) or "" )
+  m.api.OctoMailLogStartTimeText:SetText( start_time and date( DATE_FORMAT, start_time ) or "" )
+  m.api.OctoMailLogEndTimeText:SetText( end_time and date( DATE_FORMAT, end_time ) or "" )
 
   if not log then return end
   local log_count = getn( log )
@@ -1611,7 +1554,7 @@ function OctoMail.log.populate( log_type, index )
     index = math.max( 0, log_count - 10 )
   end
 
-  m.api.OctoMailLogTitleText:SetText( string.format( "%s %s", L[ log_type ], L[ "Log" ] ) )
+  m.api.OctoMailLogTitleText:SetText( log_type .. " Log" )
   m.api.OctoMailLogStatusText:SetText( string.format( "Showing %d-%d of %d", (index == 0 and log_count == 0) and index or index + 1,
   math.min( log_count, index + 10 ), log_count ) )
 
@@ -1621,7 +1564,7 @@ function OctoMail.log.populate( log_type, index )
 
       m.api[ "OctoMailLogItem" .. i .. "IconTexture" ]:SetTexture( entry.icon or "Interface/Icons/INV_Misc_Note_01" )
       m.api[ "OctoMailLogItem" .. i .. "Icon" ].item = entry.item
-      m.api[ "OctoMailLogItem" .. i .. "TimeStamp" ]:SetText( date( L[ "date_format" ] .. " " .. L[ "time_format" ], entry.timestamp ) )
+      m.api[ "OctoMailLogItem" .. i .. "TimeStamp" ]:SetText( date( DATE_FORMAT .. " " .. TIME_FORMAT, entry.timestamp ) )
       m.api[ "OctoMailLogItem" .. i .. "Subject" ]:SetText( entry.subject )
 
       m.api[ "OctoMailLogItem" .. i .. "Status" ]:SetTexture( "" )
@@ -1743,7 +1686,7 @@ function OctoMail.pfui_skin()
       m.api.OctoMailLogStartTimeButton:SetPoint( "LEFT", m.api.OctoMailLogStartTime, "RIGHT", -19, 0 )
       m.api.OctoMailLogStartTimeTitle:SetPoint( "TOPLEFT", 1, 13 )
       m.api.OctoMailLogStartTimeTitle:SetFont( m.api.pfUI.font_default, 10 )
-      m.api.OctoMailLogStartTimeTitle:SetText( L[ "Period start" ] )
+      m.api.OctoMailLogStartTimeTitle:SetText( "Period start" )
 
       m.api.pfUI.api.StripTextures( m.api.OctoMailLogEndTime )
       m.api.pfUI.api.SkinButton( m.api.OctoMailLogEndTime )
@@ -1753,7 +1696,7 @@ function OctoMail.pfui_skin()
       m.api.OctoMailLogEndTimeButton:SetPoint( "LEFT", m.api.OctoMailLogEndTime, "RIGHT", -19, 0 )
       m.api.OctoMailLogEndTimeTitle:SetPoint( "TOPLEFT", 1, 13 )
       m.api.OctoMailLogEndTimeTitle:SetFont( m.api.pfUI.font_default, 10 )
-      m.api.OctoMailLogEndTimeTitle:SetText( L[ "Period end" ] )
+      m.api.OctoMailLogEndTimeTitle:SetText( "Period end" )
 
       m.api.pfUI.api.SkinDropDown( m.api.OctoMailLogPlayersDropDown, nil, nil, nil, true )
       m.api.UIDropDownMenu_SetWidth( 90, m.api.OctoMailLogPlayersDropDown )
@@ -1767,7 +1710,7 @@ function OctoMail.pfui_skin()
       local label = m.api.OctoMailLogFrame:CreateFontString( nil, "BACKGROUND", "GameFontNormal" )
       label:SetFont( m.api.pfUI.font_default, 10 )
       label:SetPoint( "TOPLEFT", 251, -45 )
-      label:SetText( L[ "Players" ] )
+      label:SetText( "Players" )
     end )
   end
 end
