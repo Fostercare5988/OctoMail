@@ -28,7 +28,8 @@ local INBOX_AUCTIONHOUSES = {
 }
 
 OctoMail.api = getfenv()
-OctoMail.timer = 0
+-- Seconds between inbox refreshes while the mailbox is open.
+OctoMail.INBOX_REFRESH_INTERVAL = 3
 OctoMail.log = {}
 OctoMail.orig = {}
 OctoMail.hooks = {}
@@ -54,7 +55,6 @@ OctoMail.calendar = m.Calendar.new()
 function OctoMail:init()
   self.debug( "OctoMail.init" )
   self.update_frame = m.api.CreateFrame( "Frame", "OctoMailFrame", m.api.MailFrame )
-  self.update_frame:SetScript( "OnUpdate", self.on_update )
 
   -- Register events
   self.update_frame:SetScript( "OnEvent", function() self[ event ]() end )
@@ -83,12 +83,13 @@ end
 
 ---@param args string
 function OctoMail.slash_command( args )
-  if args == "" or args == "help" then
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail " .. "Help" .. "|r" )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om log|r " .. "Toggle logging on/off" )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear sent|r " .. "Clear sent log" )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear received|r " .. "Clear received log" )
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear names|r " .. "Clear saved recipient names from autocomplete" )
+  local known = { log = true, debug = true, [ "clear sent" ] = true, [ "clear received" ] = true, [ "clear names" ] = true }
+  if not known[ args ] then
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail commands|r" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om log|r Turn the mail log on or off" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear sent|r Clear the sent log" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear received|r Clear the received log" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/om clear names|r Forget saved autocomplete names" )
     return
   end
 
@@ -112,13 +113,15 @@ function OctoMail.slash_command( args )
     if args == "clear sent" then
       m.info( "Sent log cleared." )
       m.api.OctoMail_Log[ "Sent" ] = {}
+      m.log_view = nil
     elseif args == "clear received" then
       m.info( "Received log cleared." )
       m.api.OctoMail_Log[ "Received" ] = {}
+      m.log_view = nil
     elseif args == "clear names" then
       m.info( "Recipient autocomplete names have been cleared." )
-      local key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
-      m.api.OctoMail_AutoCompleteNames[ key ] = {}
+      m.api.OctoMail_AutoCompleteNames[ m.names_key ] = {}
+      m.sorted_names = nil
     end
   end
 
@@ -130,6 +133,12 @@ function OctoMail.slash_command( args )
       m.info( "Debug is disabled." )
     end
   end
+end
+
+-- Work that must wait for the next frame (cursor, send queue, Open All, bag
+-- refresh) sets its flag and calls wake(); on_update runs until none is left.
+function OctoMail.wake()
+  m.update_frame:SetScript( "OnUpdate", m.on_update )
 end
 
 function OctoMail.on_update()
@@ -156,7 +165,7 @@ function OctoMail.on_update()
     local _, _, _, _, _, COD, _, _, _, _, _, _, isGM = m.api.GetInboxHeaderInfo( m.inbox_index )
     if m.inbox_index > m.api.GetInboxNumItems() then
       if m.money_received > 0 then
-        m.info( string.format( "%s%s.", m.format_money( m.money_received ), "collected" ) )
+        m.info( m.format_money( m.money_received ) .. "collected." )
       end
       m.inbox_abort()
     elseif m.inbox_skip or COD > 0 or isGM then
@@ -168,10 +177,18 @@ function OctoMail.on_update()
     end
   end
 
-  if m.timer > 0 then
-    m.timer = m.timer - 1
-  elseif not m.inbox_opening then
-    m.timer = 200
+  if m.send_refresh then
+    m.send_refresh = nil
+    m.api.SendMailFrame_Update()
+  end
+
+  if not (m._cursorItem or m.sendmail_update or m.inbox_update or m.send_refresh) then
+    m.update_frame:SetScript( "OnUpdate", nil )
+  end
+end
+
+function OctoMail.inbox_refresh()
+  if not m.inbox_opening and m.api.MailFrame:IsVisible() then
     m.api.CheckInbox()
   end
 end
@@ -187,11 +204,15 @@ end
 ---@param item table
 function OctoMail.set_cursor_item( item )
   m._cursorItem = item
+  m.wake()
 end
 
+-- One refresh per frame for a burst of bag events, and none on the Inbox tab:
+-- switching to Send Mail refreshes it anyway.
 function OctoMail.BAG_UPDATE()
-  if m.api.MailFrame:IsVisible() then
-    m.api.SendMailFrame_Update()
+  if m.api.SendMailFrame:IsVisible() then
+    m.send_refresh = true
+    m.wake()
   end
 end
 
@@ -217,12 +238,17 @@ function OctoMail.MAIL_SHOW()
     m.api.MailFrameTab3:Hide()
   end
 
-  m.timer = 0
+  if m.inbox_ticker then m.inbox_ticker:Cancel() end
+  m.inbox_ticker = m.api.C_Timer.NewTicker( m.INBOX_REFRESH_INTERVAL, m.inbox_refresh )
   m.money_received = 0
   m.update_money( 0 )
 end
 
 function OctoMail.MAIL_CLOSED()
+  if m.inbox_ticker then
+    m.inbox_ticker:Cancel()
+    m.inbox_ticker = nil
+  end
   m.inbox_abort()
   m.sendmail_sending = false
   m.api.StaticPopup_Hide( "OCTOMAIL_SEND_MONEY" )
@@ -287,7 +313,9 @@ function OctoMail.PLAYER_LOGIN()
     m.orig[ k ] = m.api[ k ]
     m.api[ k ] = v
   end
-  local key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
+  -- autocomplete names are shared per realm and faction
+  m.names_key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
+  local key = m.names_key
   m.api.OctoMail_AutoCompleteNames[ key ] = m.api.OctoMail_AutoCompleteNames[ key ] or {}
   for char, last_seen in m.api.OctoMail_AutoCompleteNames[ key ] do
     -- Timestamps are time(), not GetTime(). GetTime() counts seconds since the
@@ -323,12 +351,14 @@ function OctoMail.MAIL_SEND_SUCCESS()
   end
   if m.sendmail_sending then
     m.sendmail_update = true
+    m.wake()
   end
 end
 
 function OctoMail.MAIL_INBOX_UPDATE()
   if m.inbox_opening then
     m.inbox_update = true
+    m.wake()
   end
 end
 
@@ -373,10 +403,10 @@ end
 
 ---@param name string
 function OctoMail.add_auto_complete_name( name )
-  local key = m.api.GetCVar( "realmName" ) .. "|" .. m.api.UnitFactionGroup( "player" )
   -- absolute unix time so the 30 day expiry survives a logout, see the prune
   -- loop in PLAYER_LOGIN
-  m.api.OctoMail_AutoCompleteNames[ key ][ name ] = m.api.time()
+  m.api.OctoMail_AutoCompleteNames[ m.names_key ][ name ] = m.api.time()
+  m.sorted_names = nil
 end
 
 function OctoMail.inbox_load()
@@ -401,6 +431,7 @@ function OctoMail.inbox_open_all()
   m.inbox_skip = false
   m.inbox_index = 1
   m.inbox_update = true
+  m.wake()
 end
 
 function OctoMail.inbox_abort()
@@ -418,9 +449,9 @@ function OctoMail.set_cod_text()
   end
 
   if m.api.SendMailCODAllButton:GetChecked() then
-    m.api.SendMailMoneyText:SetText( text .. " " .. "each mail" .. ":" )
+    m.api.SendMailMoneyText:SetText( text .. " each mail:" )
   else
-    m.api.SendMailMoneyText:SetText( text .. " " .. "1st mail" .. ":" )
+    m.api.SendMailMoneyText:SetText( text .. " 1st mail:" )
   end
 end
 
@@ -449,7 +480,7 @@ end
 ---@param money number
 function OctoMail.update_money( money )
   m.money_received = m.money_received + money
-  m.api.MoneyReceived:SetText( "Money received" .. ": " .. m.format_money( m.money_received ) )
+  m.api.MoneyReceived:SetText( "Money received: " .. m.format_money( m.money_received ) )
 
   if m.money_received > 0 then
     m.api.MoneyReceived:Show()
@@ -708,6 +739,9 @@ function OctoMail.hook.ClickSendMailItemButton()
 end
 
 function OctoMail.hook.GetContainerItemInfo( bag, slot )
+  if not m.api.MailFrame:IsVisible() then
+    return m.orig.GetContainerItemInfo( bag, slot )
+  end
   local ret = pack( m.orig.GetContainerItemInfo( bag, slot ) )
   ret[ 3 ] = ret[ 3 ] or m.sendmail_attached( bag, slot ) and 1 or nil
   return unpack( ret )
@@ -959,7 +993,7 @@ function OctoMail.sendmail_load()
     m.api.MailAutoCompleteBox:Hide()
   end
 
-  m.api.SendMailCODAllButtonText:SetText( "  " .. "All mails" )
+  m.api.SendMailCODAllButtonText:SetText( "  All mails" )
   m.api.SendMailCODAllButton:SetScript( "OnClick", m.set_cod_text )
 
   do
@@ -1245,11 +1279,15 @@ do
     table.setn( matches, 0 )
     index = nil
 
-    local autoCompleteNames = {}
-    for name, time in m.api.OctoMail_AutoCompleteNames[ m.api.GetCVar "realmName" .. "|" .. m.api.UnitFactionGroup "player" ] do
-      table.insert( autoCompleteNames, { name = name, time = time } )
+    -- most recent first; rebuilt only after a name is added or cleared
+    if not m.sorted_names then
+      m.sorted_names = {}
+      for name, time in m.api.OctoMail_AutoCompleteNames[ m.names_key ] do
+        table.insert( m.sorted_names, { name = name, time = time } )
+      end
+      table.sort( m.sorted_names, function( a, b ) return b.time < a.time end )
     end
-    table.sort( autoCompleteNames, function( a, b ) return b.time < a.time end )
+    local autoCompleteNames = m.sorted_names
 
     local ignore = { [ m.api.UnitName "player" ] = true }
     local function process( name )
@@ -1551,6 +1589,7 @@ function OctoMail.log.add( log_type, state )
 
   local log = m.api.OctoMail_Log[ log_type ]
   table.insert( log, data )
+  m.log_view = nil
 
   -- Cap the log. Entries are appended oldest-first and nothing else removed
   -- them, so this table grew for the life of the character -- every mail ever
@@ -1562,16 +1601,9 @@ function OctoMail.log.add( log_type, state )
 end
 
 ---@param log_type LogType
----@param index number?
-function OctoMail.log.populate( log_type, index )
-  m.current_log_type = log_type
-  local filters = m.api.OctoMail_Log[ "Settings" ][ log_type .. "Filters" ] or {}
-  local start_time = m[ log_type .. "_start_time" ]
-  local end_time = m[ log_type .. "_end_time" ]
-  if start_time then start_time = start_time - 43200 end
-  if end_time then end_time = end_time + 43140 end
-
-  local log = m.filter( m.api.OctoMail_Log[ log_type ], function( item )
+---@return table?
+function OctoMail.log_filter( log_type, filters, start_time, end_time )
+  return m.filter( m.api.OctoMail_Log[ log_type ], function( item )
     local ret =
         (filters.Money and item.money and item.money > 0 and (not item.cod or item.cod == 0) and not item.ah)
         or
@@ -1603,6 +1635,26 @@ function OctoMail.log.populate( log_type, index )
 
     return ret
   end )
+end
+
+---@param log_type LogType
+---@param index number?
+function OctoMail.log.populate( log_type, index )
+  m.current_log_type = log_type
+  local filters = m.api.OctoMail_Log[ "Settings" ][ log_type .. "Filters" ] or {}
+  local start_time = m[ log_type .. "_start_time" ]
+  local end_time = m[ log_type .. "_end_time" ]
+  if start_time then start_time = start_time - 43200 end
+  if end_time then end_time = end_time + 43140 end
+
+  -- Scrolling (index given) reuses the filtered list; anything else rebuilds it.
+  local log
+  if index and m.log_view and m.log_view_type == log_type then
+    log = m.log_view
+  else
+    log = m.log_filter( log_type, filters, start_time, end_time )
+    m.log_view, m.log_view_type = log, log_type
+  end
 
   m.api.OctoMailLogStartTimeText:SetText( start_time and date( DATE_FORMAT, start_time ) or "" )
   m.api.OctoMailLogEndTimeText:SetText( end_time and date( DATE_FORMAT, end_time ) or "" )
