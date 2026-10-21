@@ -1,5 +1,5 @@
 ## Interface: 11200
-## Title: |cffabd473Octo|cffffffffMail
+## Title: |cffff9e38OctoMail|r |cffffd6a8[Fostercare5988]|r
 ## Author: shirsig, sica42; maintained by Fostercare5988
 ## X-Maintainer: Fostercare5988
 ## Version: 1.6.0
