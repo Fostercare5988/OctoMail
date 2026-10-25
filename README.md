@@ -9,7 +9,7 @@ This is a fork of **[TurtleMail](https://github.com/sica42/TurtleMail)** by **sh
 ## Requirements
 
 - WoW 1.12.1 client (the OctoWoW client)
-- [ClassicAPI](https://github.com/brues-code/ClassicAPI) 1.16.0 or newer. OctoMail does not load without it.
+- [ClassicAPI](https://github.com/brues-code/ClassicAPI) 1.17.7 or newer. OctoMail does not load without it.
 
 ## What it does
 
