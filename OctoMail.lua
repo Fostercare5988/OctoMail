@@ -76,9 +76,6 @@ function OctoMail:init()
 
   -- hack to prevent beancounter from deleting mail
   self.TakeInboxMoney, self.TakeInboxItem, self.DeleteInboxItem = m.api.TakeInboxMoney, m.api.TakeInboxItem, m.api.DeleteInboxItem
-
-  self.tooltip_frame = m.api.CreateFrame( "GameTooltip", "OctoMailTooltipFrame", nil, "GameTooltipTemplate" )
-  self.tooltip_frame:SetOwner( m.api.WorldFrame, "ANCHOR_NONE" );
 end
 
 ---@param args string

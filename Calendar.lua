@@ -1,11 +1,11 @@
 OctoMail = OctoMail or {}
 local m = OctoMail
 
--- ClassicAPI 1.17.7 is the support floor. This file loads first, so it decides
+-- ClassicAPI 1.17.11 is the support floor. This file loads first, so it decides
 -- for OctoMail.lua as well (see m.disabled there).
-if type( CLASSIC_API_VERSION ) ~= "number" or CLASSIC_API_VERSION < 11707 then
+if type( CLASSIC_API_VERSION ) ~= "number" or CLASSIC_API_VERSION < 11711 then
   m.disabled = true
-  DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail|r: requires ClassicAPI 1.17.7 or newer. OctoMail is turned off." )
+  DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473OctoMail|r: requires ClassicAPI 1.17.11 or newer. OctoMail is turned off." )
   return
 end
 
