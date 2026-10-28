@@ -16,6 +16,18 @@ local TIME_FORMAT = "%H:%M"
 -- Filter menu labels that differ from the saved filter key.
 local FILTER_LABELS = { Money = "Money Attached", COD = "C.O.D.", AH = "Auction House" }
 
+-- Battleground marks counted in the inbox title. Extend the list to track
+-- other items.
+local MARKS = {
+  { name = "Alterac Valley Mark of Honor", short = "AV" },
+  { name = "Warsong Gulch Mark of Honor", short = "WSG" },
+  { name = "Arathi Basin Mark of Honor", short = "AB" },
+}
+local MARK_SHORT = {}
+for _, mark in MARKS do
+  MARK_SHORT[ mark.name ] = mark.short
+end
+
 local INBOX_AUCTIONHOUSES = {
   [ "Stormwind Auction House" ] = true,
   [ "Alliance Auction House" ] = true,
@@ -76,6 +88,9 @@ function OctoMail:init()
 
   -- hack to prevent beancounter from deleting mail
   self.TakeInboxMoney, self.TakeInboxItem, self.DeleteInboxItem = m.api.TakeInboxMoney, m.api.TakeInboxItem, m.api.DeleteInboxItem
+
+  -- inbox indices queued for deletion once the server confirms their take
+  self.delete_queue = {}
 end
 
 ---@param args string
@@ -164,6 +179,15 @@ function OctoMail.on_update()
       if m.money_received > 0 then
         m.info( m.format_money( m.money_received ) .. "collected." )
       end
+      if m.marks_received_total and m.marks_received_total > 0 then
+        local parts = {}
+        for _, mark in MARKS do
+          if m.marks_received[ mark.name ] then
+            table.insert( parts, m.marks_received[ mark.name ] .. "x " .. mark.name )
+          end
+        end
+        m.info( "Collected " .. table.concat( parts, ", " ) .. "." )
+      end
       m.inbox_abort()
     elseif m.inbox_skip or COD > 0 or isGM then
       m.inbox_skip = false
@@ -186,6 +210,8 @@ end
 
 function OctoMail.inbox_refresh()
   if not m.inbox_opening and m.api.MailFrame:IsVisible() then
+    -- self-heal a deferred delete whose inbox update was missed
+    m.inbox_delete_pending()
     m.api.CheckInbox()
   end
 end
@@ -239,6 +265,8 @@ function OctoMail.MAIL_SHOW()
   m.inbox_ticker = m.api.C_Timer.NewTicker( m.INBOX_REFRESH_INTERVAL, m.inbox_refresh )
   m.money_received = 0
   m.update_money( 0 )
+  m.marks_received, m.marks_received_total = {}, 0
+  m.api.OctoMailMarksReceived:Hide()
 end
 
 function OctoMail.MAIL_CLOSED()
@@ -247,6 +275,7 @@ function OctoMail.MAIL_CLOSED()
     m.inbox_ticker = nil
   end
   m.inbox_abort()
+  m.delete_queue = {}
   m.sendmail_sending = false
   m.sendmail_pending = nil
   m.api.StaticPopup_Hide( "OCTOMAIL_SEND_MONEY" )
@@ -362,6 +391,7 @@ function OctoMail.MAIL_SEND_SUCCESS()
 end
 
 function OctoMail.MAIL_INBOX_UPDATE()
+  m.inbox_delete_pending()
   if m.inbox_opening then
     m.inbox_update = true
     m.wake()
@@ -383,16 +413,19 @@ function OctoMail.auction_kind( subject )
   end
 end
 
--- Auction House and returned markers for the rows on the current page.
+-- Auction House and returned markers, and the attachment stack counts, for
+-- the rows on the current page.
 function OctoMail.inbox_update_icons()
   local num_items = m.api.GetInboxNumItems()
   for i = 1, 7 do
     local index = i + (m.api.InboxFrame.pageNum - 1) * 7
-    local auction, returned
+    local auction, returned, count
     if index <= num_items then
       local _, _, sender, subject, _, _, _, _, _, was_returned = m.api.GetInboxHeaderInfo( index )
       auction = INBOX_AUCTIONHOUSES[ sender ] or m.auction_kind( subject )
       returned = was_returned
+      local _, _, stack = m.api.GetInboxItem( index, 1 )
+      count = stack
     end
     if auction then
       m.api[ "OctoMailAuctionIcon" .. i ]:Show()
@@ -403,6 +436,13 @@ function OctoMail.inbox_update_icons()
       m.api[ "OctoMailReturnedArrow" .. i ]:Show()
     else
       m.api[ "OctoMailReturnedArrow" .. i ]:Hide()
+    end
+    local badge = m.api[ "OctoMailItemCount" .. i ]
+    if count and count > 0 then
+      badge:SetText( count )
+      badge:Show()
+    else
+      badge:Hide()
     end
   end
 end
@@ -427,6 +467,20 @@ function OctoMail.inbox_load()
   for i = 1, 7 do
     m.api[ "OctoMailAuctionIcon" .. i .. "Texture" ]:SetVertexColor( m.api.NORMAL_FONT_COLOR.r, m.api.NORMAL_FONT_COLOR.g, m.api.NORMAL_FONT_COLOR.b )
     m.api[ "OctoMailReturnedArrow" .. i .. "Texture" ]:SetVertexColor( m.api.NORMAL_FONT_COLOR.r, m.api.NORMAL_FONT_COLOR.g, m.api.NORMAL_FONT_COLOR.b )
+  end
+
+  local received = m.api.InboxFrame:CreateFontString( "OctoMailMarksReceived", "ARTWORK", "GameFontNormal" )
+  received:SetJustifyH( "LEFT" )
+  received:SetPoint( "TOPLEFT", m.api.InboxTitleText, "BOTTOMLEFT", 0, -19 )
+  received:Hide()
+
+  -- Stack count badge on every attachment icon, the way bags show it: a mail
+  -- holding three marks reads "3" without having to open it.
+  for i = 1, 7 do
+    local badge = m.api[ "MailItem" .. i .. "Button" ]:CreateFontString( "OctoMailItemCount" .. i, "OVERLAY", "NumberFontNormalSmall" )
+    badge:SetJustifyH( "RIGHT" )
+    badge:SetPoint( "BOTTOMRIGHT", m.api[ "MailItem" .. i .. "ButtonIcon" ], "BOTTOMRIGHT", -1, 1 )
+    badge:Hide()
   end
 end
 
@@ -495,6 +549,56 @@ function OctoMail.update_money( money )
   end
 end
 
+-- Marks ---------------------------------------------------------------------
+
+-- Name and stack count of a tracked mark attached to mail index, or nil.
+-- GetInboxItem reports the attachment's stack size directly, so a mail with
+-- three marks counts as three, without opening it.
+function OctoMail.inbox_item_marks( index )
+  local name, _, count = m.api.GetInboxItem( index, 1 )
+  if type( name ) ~= "string" or name == "" then return nil end
+  if type( count ) ~= "number" or count < 1 then count = 1 end
+  if not MARK_SHORT[ name ] then return nil end
+  return name, count
+end
+
+-- Every tracked mark currently sitting in the mailbox, and their total.
+function OctoMail.inbox_marks_tally()
+  local tally, total = {}, 0
+  for i = 1, m.api.GetInboxNumItems() do
+    local name, count = m.inbox_item_marks( i )
+    if name then
+      tally[ name ] = ( tally[ name ] or 0 ) + count
+      total = total + count
+    end
+  end
+  return tally, total
+end
+
+-- The marks suffix for the inbox title, "" when the mailbox holds none.
+function OctoMail.marks_title()
+  local tally, total = m.inbox_marks_tally()
+  if total == 0 then return "" end
+
+  local parts = {}
+  for _, mark in MARKS do
+    if tally[ mark.name ] then
+      table.insert( parts, mark.short .. " " .. tally[ mark.name ] )
+    end
+  end
+  local breakdown = getn( parts ) > 1 and ( " (" .. table.concat( parts, ", " ) .. ")" ) or ""
+  return " - " .. total .. ( total == 1 and " mark" or " marks" ) .. breakdown
+end
+
+-- Running total of marks taken this visit, shown like the money counter.
+function OctoMail.update_marks( name, count )
+  m.marks_received = m.marks_received or {}
+  m.marks_received[ name ] = ( m.marks_received[ name ] or 0 ) + count
+  m.marks_received_total = ( m.marks_received_total or 0 ) + count
+  m.api.OctoMailMarksReceived:SetText( "Marks received: " .. m.marks_received_total )
+  m.api.OctoMailMarksReceived:Show()
+end
+
 ---@param i number
 ---@param manual boolean?
 function OctoMail.inbox_open( i, manual )
@@ -502,6 +606,10 @@ function OctoMail.inbox_open( i, manual )
   local package_icon, _, sender, subject, money, cod, _, has_item, read, returned, _, _, gm = m.api.GetInboxHeaderInfo( i )
 
   if has_item then
+    local name, count = m.inbox_item_marks( i )
+    if name then
+      m.update_marks( name, count )
+    end
     if not m.received_icon then
       m.received_item = m.api.GetInboxItem( i )
       m.received_icon = package_icon
@@ -533,7 +641,33 @@ function OctoMail.inbox_open( i, manual )
   m.api.GetInboxText( i )
   m.TakeInboxMoney( i )
   m.TakeInboxItem( i )
-  m.DeleteInboxItem( i )
+
+  -- The server declines a delete sent while the takes above are still in
+  -- flight, which used to leave the emptied mail behind. Mail that had
+  -- nothing to take goes right away; the rest is queued and deleted once an
+  -- inbox update confirms it reads back empty.
+  if money == 0 and not has_item then
+    m.DeleteInboxItem( i )
+  else
+    table.insert( m.delete_queue, { index = i, sender = sender or "", subject = subject or "" } )
+  end
+end
+
+-- Delete the mail of a finished take. Sender and subject must still match so
+-- a mail that already left the inbox (shifting the rest down) is never
+-- confused with the mail that took its place.
+function OctoMail.inbox_delete_pending()
+  for n = getn( m.delete_queue ), 1, -1 do
+    local p = m.delete_queue[ n ]
+    local _, _, sender, subject, money, _, _, has_item = m.api.GetInboxHeaderInfo( p.index )
+    if not sender then
+      -- the mail already left the inbox on its own
+      table.remove( m.delete_queue, n )
+    elseif sender == p.sender and subject == p.subject and money == 0 and not has_item then
+      m.DeleteInboxItem( p.index )
+      table.remove( m.delete_queue, n )
+    end
+  end
 end
 
 function OctoMail.inbox_update_lock()
@@ -571,7 +705,7 @@ function OctoMail.hook.InboxFrame_Update()
   local currentPage = m.api.InboxFrame.pageNum
   local totalPages = math.ceil( m.api.GetInboxNumItems() / m.api.INBOXITEMS_TO_DISPLAY )
   local text = totalPages > 0 and (currentPage .. "/" .. totalPages) or m.api.EMPTY
-  m.api.InboxTitleText:SetText( m.api.INBOX .. " [" .. text .. "]" )
+  m.api.InboxTitleText:SetText( m.api.INBOX .. " [" .. text .. "]" .. m.marks_title() )
 
   m.inbox_update_icons()
   m.inbox_update_lock()
