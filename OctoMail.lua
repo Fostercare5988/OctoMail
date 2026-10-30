@@ -2037,3 +2037,25 @@ function OctoMail.debug( ... )
 end
 
 OctoMail:init()
+
+-- Game Menu > AddOn Options > OctoMail (ClassicAPI).
+local entry = CreateFrame("Frame", "OctoMailOptionsEntry")
+entry.name = "OctoMail"
+local entryTitle = entry:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+entryTitle:SetPoint("TOPLEFT", entry, "TOPLEFT", 16, -16)
+entryTitle:SetText("OctoMail")
+local entryText = entry:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+entryText:SetPoint("TOPLEFT", entryTitle, "BOTTOMLEFT", 0, -8)
+entryText:SetWidth(380)
+entryText:SetJustifyH("LEFT")
+entryText:SetText("Open all, send many attachments, autocomplete and a mail log. Type /om to see the commands.")
+local entryOpen = CreateFrame("Button", "OctoMailOptionsEntryOpen", entry, "UIPanelButtonTemplate")
+entryOpen:SetWidth(172); entryOpen:SetHeight(22)
+entryOpen:SetPoint("TOPLEFT", entry, "TOPLEFT", 16, -80)
+entryOpen:SetText("Mail log")
+entryOpen:SetScript("OnClick", function()
+    if InterfaceOptionsFrame and InterfaceOptionsFrame:IsShown() then InterfaceOptionsFrame:Hide() end
+    if GameMenuFrame and GameMenuFrame:IsShown() then HideUIPanel(GameMenuFrame) end
+    SlashCmdList["OCTOMAIL"]("log")
+end)
+InterfaceOptions_AddCategory(entry)
